@@ -1,0 +1,294 @@
+"""All Telegram handler coroutines plus scheduling jobs."""
+from __future__ import annotations
+
+import datetime as dt
+import logging
+import re
+import zoneinfo
+from typing import Any
+
+from telegram import Update
+from telegram.ext import ContextTypes
+
+import intelligence.history as history
+import storage.state as state
+from bot.ui import (
+    _MARKS,
+    context_keyboard,
+    focus_slots,
+    plan_keyboard,
+    render_plan,
+    render_review,
+    review_keyboard,
+    safe_edit,
+)
+from scheduler import Slot, build_plan, isodate_with_offset
+from ticktick.client import TickTickClient
+
+log = logging.getLogger(__name__)
+
+
+# --- timezone helpers ------------------------------------------------------
+def _tz(config: dict[str, Any]) -> zoneinfo.ZoneInfo:
+    return zoneinfo.ZoneInfo(config["timezone"])
+
+
+def _tz_offset(config: dict[str, Any], day: dt.date) -> str:
+    tz = _tz(config)
+    off = dt.datetime.combine(day, dt.time(12, 0), tzinfo=tz).utcoffset() or dt.timedelta()
+    total = int(off.total_seconds())
+    sign = "+" if total >= 0 else "-"
+    total = abs(total)
+    return f"{sign}{total // 3600:02d}{(total % 3600) // 60:02d}"
+
+
+# --- error handler ---------------------------------------------------------
+async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    log.error("Handler error", exc_info=ctx.error)
+
+
+# --- commands --------------------------------------------------------------
+async def cmd_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "Bot is live. /plan to plan today, or wait for the morning ping.\n"
+        f"Your chat id is `{update.effective_chat.id}`.",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_plan(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _ask_context(ctx, update.effective_chat.id)
+
+
+async def cmd_review(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _send_review(ctx, update.effective_chat.id)
+
+
+# --- morning flow ----------------------------------------------------------
+async def morning_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _ask_context(ctx, ctx.job.chat_id)
+
+
+async def _ask_context(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    await ctx.bot.send_message(
+        chat_id,
+        f"Good morning ☀️ How's *{dt.datetime.now().strftime('%A %d %b')}* looking?",
+        reply_markup=context_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+async def on_context(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    mode = query.data.split(":")[1]
+    config = ctx.application.bot_data["config"]
+    client = ctx.application.bot_data.get("ticktick")
+    today = dt.datetime.now(_tz(config)).date()
+
+    meta = state.get_meta()
+    past = history.load_events(since_days=14)
+    slots = build_plan(
+        config, today, mode, client,
+        rotation_offset=meta.get("rotation_offset", 0), history=past,
+    )
+    state.save_day(today, slots, {"work_mode": mode})
+
+    if mode == "rest":
+        await safe_edit(query, "Enjoy the day off. 🌴 Nothing scheduled.")
+        return
+    await safe_edit(query, render_plan(slots), reply_markup=plan_keyboard(slots))
+
+
+async def on_swap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    config = ctx.application.bot_data["config"]
+    today = dt.datetime.now(_tz(config)).date()
+    data = state.load_day(today)
+    if not data:
+        await query.answer("No active plan — run /plan.", show_alert=True)
+        return
+
+    slots: list[Slot] = data["slots"]
+    idx = int(query.data.split(":")[1])
+    slot = slots[idx]
+    if not slot.candidates:
+        await query.answer("No alternatives for this slot.", show_alert=True)
+        return
+
+    cur = next((i for i, c in enumerate(slot.candidates) if c["title"] == slot.task_title), -1)
+    nxt = (cur + 1) % len(slot.candidates)
+    chosen = slot.candidates[nxt]
+    slot.task_title = chosen["title"]
+    slot.task_id = chosen["task_id"]
+    slot.project_id = chosen["project_id"]
+
+    state.save_day(today, slots, data["context"])
+    await query.answer(f"→ {chosen['title'][:40]}")
+    await safe_edit(query, render_plan(slots), reply_markup=plan_keyboard(slots))
+
+
+async def on_off(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    config = ctx.application.bot_data["config"]
+    today = dt.datetime.now(_tz(config)).date()
+    state.save_day(today, [], {"work_mode": "rest"})
+    await safe_edit(query, "Day written off. 🌙 Rest up.")
+
+
+async def on_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer("Syncing to TickTick…")
+    config = ctx.application.bot_data["config"]
+    client: TickTickClient | None = ctx.application.bot_data.get("ticktick")
+    today = dt.datetime.now(_tz(config)).date()
+    data = state.load_day(today)
+    if not data:
+        await safe_edit(query, "No active plan to confirm.")
+        return
+
+    slots: list[Slot] = data["slots"]
+    offset = _tz_offset(config, today)
+    created, errors = 0, 0
+
+    if client:
+        for s in (sl for sl in slots if sl.is_focus and sl.task_title):
+            try:
+                if not s.task_id:
+                    client.create_task(
+                        title=s.task_title,
+                        start=isodate_with_offset(today, s.start, offset),
+                        end=isodate_with_offset(today, s.end, offset),
+                        content=f"Scheduled by bot — {s.category} slot.",
+                    )
+                created += 1
+            except Exception as e:  # noqa: BLE001
+                log.warning("create_task failed: %s", e)
+                errors += 1
+
+    meta = state.get_meta()
+    meta["rotation_offset"] = meta.get("rotation_offset", 0) + len(focus_slots(slots))
+    state.set_meta(meta)
+
+    note = "" if not errors else f" ({errors} failed — check logs)"
+    tail = "Synced to TickTick." if client else "TickTick not connected — plan saved locally only."
+    await safe_edit(query, render_plan(slots) + f"\n\n✅ *Locked in.* {tail}{note}")
+
+
+# --- evening review --------------------------------------------------------
+async def evening_job(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await _send_review(ctx, ctx.job.chat_id)
+
+
+async def _send_review(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    config = ctx.application.bot_data["config"]
+    today = dt.datetime.now(_tz(config)).date()
+    data = state.load_day(today)
+    if not data or not focus_slots(data["slots"]):
+        await ctx.bot.send_message(chat_id, "Nothing to review tonight. 🌙")
+        return
+    outcomes = data["context"].get("outcomes", {})
+    await ctx.bot.send_message(
+        chat_id,
+        render_review(data["slots"], outcomes),
+        reply_markup=review_keyboard(data["slots"]),
+        parse_mode="Markdown",
+    )
+
+
+async def on_review_mark(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    config = ctx.application.bot_data["config"]
+    today = dt.datetime.now(_tz(config)).date()
+    data = state.load_day(today)
+    if not data:
+        await query.answer("No plan to review — run /plan first.", show_alert=True)
+        return
+
+    _, idx, outcome = query.data.split(":")
+    outcomes = data["context"].setdefault("outcomes", {})
+    outcomes[idx] = outcome
+    state.save_day(today, data["slots"], data["context"])
+    await query.answer(f"{_MARKS[outcome]} slot {int(idx)}")
+    await safe_edit(query, render_review(data["slots"], outcomes), reply_markup=review_keyboard(data["slots"]))
+
+
+async def on_review_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer("Saving review…")
+    config = ctx.application.bot_data["config"]
+    client: TickTickClient | None = ctx.application.bot_data.get("ticktick")
+    today = dt.datetime.now(_tz(config)).date()
+    data = state.load_day(today)
+    if not data:
+        await safe_edit(query, "No plan to review.")
+        return
+
+    slots: list[Slot] = data["slots"]
+    outcomes = data["context"].get("outcomes", {})
+    day_type = data["context"].get("work_mode", "")
+    counts = {"done": 0, "skip": 0, "drop": 0, "unmarked": 0}
+
+    for i, s in enumerate(slots):
+        if not s.is_focus:
+            continue
+        outcome = outcomes.get(str(i))
+        if not outcome:
+            counts["unmarked"] += 1
+            continue
+        counts[outcome] += 1
+
+        history.append_event({
+            "date": today.isoformat(),
+            "day_type": day_type,
+            "slot_index": i,
+            "start": s.start,
+            "end": s.end,
+            "category": s.category,
+            "task_title": s.task_title,
+            "task_id": s.task_id,
+            "project_id": s.project_id,
+            "offered_alternatives": [c["title"] for c in s.candidates],
+            "outcome": outcome,
+        })
+
+        if outcome == "done" and client and s.task_id and s.project_id:
+            try:
+                client.complete_task(s.project_id, s.task_id)
+            except Exception as e:  # noqa: BLE001
+                log.warning("complete_task failed: %s", e)
+
+    summary = (
+        f"*Review saved.* ✅ {counts['done']}  ⏭️ {counts['skip']}  ❌ {counts['drop']}"
+        + (f"  ·{counts['unmarked']} unmarked" if counts["unmarked"] else "")
+    )
+    tail = "\n_Skipped tasks will float up tomorrow morning._" if counts["skip"] else ""
+    await safe_edit(query, summary + tail)
+
+
+# --- callback guard + router -----------------------------------------------
+_ROUTES = {
+    r"^ctx:":      on_context,
+    r"^swap:":     on_swap,
+    r"^confirm$":  on_confirm,
+    r"^off$":      on_off,
+    r"^evr:":      on_review_mark,
+    r"^evsubmit$": on_review_submit,
+}
+
+
+async def on_callback_guard(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Single catch-all for all inline keyboard callbacks.
+    Silently drops anything not from the allowed chat, then routes by pattern.
+    """
+    allowed = ctx.application.bot_data.get("allowed_chat_id")
+    if allowed is not None and update.effective_chat.id != allowed:
+        return
+
+    data = (update.callback_query.data or "")
+    for pattern, handler in _ROUTES.items():
+        if re.match(pattern, data):
+            await handler(update, ctx)
+            return
+    await update.callback_query.answer()
