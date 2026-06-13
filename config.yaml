@@ -1,0 +1,126 @@
+# ---------------------------------------------------------------------------
+# Personal schedule config. Everything the scheduler knows about your life
+# lives here. Edit freely; the bot reloads this file every morning.
+# ---------------------------------------------------------------------------
+
+# IANA timezone. CHANGE THIS if you are not in the UK.
+timezone: "Europe/London"
+
+# What time the morning planning message fires.
+morning_trigger: "06:30"
+
+# What time the evening review message fires (asks how each slot went).
+evening_trigger: "22:30"
+
+# ---------------------------------------------------------------------------
+# Categories map to TickTick lists (projects). `ticktick_list` is the exact
+# name of the list in your TickTick app. The scheduler pulls incomplete tasks
+# from that list as the candidate pool for a slot of this category.
+#
+# `items` is a fallback: if the TickTick list is empty (or not found), the
+# scheduler offers these generic titles instead so a slot is never blank.
+# `weight` biases how often this category is chosen when filling free slots.
+# ---------------------------------------------------------------------------
+categories:
+  projects:
+    ticktick_list: "Projects"
+    weight: 3
+    items:
+      - "Hardware Constrained Forge (CUDA + Triton kernels)"
+      - "Personal Assistant (ASR + SLM workstation Jarvis)"
+      - "Quant (time-series signals for daily/weekly trades)"
+
+  study:
+    ticktick_list: "Study"
+    weight: 2
+    items:
+      - "SOTA papers — build knowledge base"
+      - "Axler — Linear Algebra Done Right (Ch.3)"
+      - "Abbott — Understanding Analysis"
+      - "Read blogs"
+      - "Find professors / programs + read their research"
+      - "Research how to approach a proposal"
+
+  admin:
+    ticktick_list: "Admin"
+    weight: 1
+    items:
+      - "Sort visas"
+      - "Weekly shop"
+      - "Clean room"
+      - "Laundry"
+      - "Sports / outing with friends"
+
+# A short, low-effort thing for the 15-min commute (office days only).
+commute:
+  ticktick_list: "Reading Queue"
+  weight: 1
+  items:
+    - "Read a paper abstract + intro"
+
+# ---------------------------------------------------------------------------
+# Strategy for filling free slots:
+#   priority  -> always drain highest-weight category first
+#   rotation  -> round-robin across categories (weighted), avoids monotony
+# ---------------------------------------------------------------------------
+fill_strategy: "rotation"
+
+# Length of the buffer/break at the end of each focus hour (minutes).
+focus_break_minutes: 10
+
+# ---------------------------------------------------------------------------
+# Day templates. The scheduler picks one based on the weekday and your answer
+# to the morning context questions. Times are 24h "HH:MM".
+#
+# Each block is either:
+#   type: fixed   -> a labelled block that is NOT a fillable focus slot
+#                    (workout, work, food/recreation, commute-reading)
+#   type: focus   -> a 1-hour fillable slot; the bot assigns a task to it
+# ---------------------------------------------------------------------------
+templates:
+
+  # Monday–Thursday, working from home.
+  weekday_home:
+    days: [mon, tue, wed, thu]
+    blocks:
+      - { type: fixed, start: "06:15", end: "07:30", label: "Wake + workout" }
+      - { type: fixed, start: "08:30", end: "17:30", label: "Work" }
+      - { type: fixed, start: "17:30", end: "19:30", label: "Food prep + recreation" }
+      - { type: focus, start: "20:00", end: "21:00" }
+      - { type: focus, start: "21:10", end: "22:10" }
+      - { type: focus, start: "22:20", end: "23:00" }
+
+  # Wed/Thu when you're in the office (later finish + commute reading).
+  # Selected only if you answer "office" to the work question.
+  weekday_office:
+    days: [wed, thu]
+    blocks:
+      - { type: fixed, start: "06:15", end: "07:30", label: "Wake + workout" }
+      - { type: fixed, start: "08:15", end: "08:30", label: "Commute", commute: true }
+      - { type: fixed, start: "08:30", end: "18:30", label: "Work (office)" }
+      - { type: fixed, start: "18:30", end: "18:45", label: "Commute", commute: true }
+      - { type: fixed, start: "18:45", end: "20:00", label: "Food prep + recreation" }
+      - { type: focus, start: "20:00", end: "21:00" }
+      - { type: focus, start: "21:10", end: "22:10" }
+      - { type: focus, start: "22:20", end: "23:00" }
+
+  # Friday / Saturday / Sunday — no work. Two dense sessions.
+  weekend:
+    days: [fri, sat, sun]
+    blocks:
+      - { type: fixed, start: "06:30", end: "08:00", label: "Wake + workout" }
+      - { type: focus, start: "09:00", end: "10:00" }
+      - { type: focus, start: "10:10", end: "11:10" }
+      - { type: focus, start: "11:20", end: "12:20" }
+      - { type: fixed, start: "12:20", end: "14:20", label: "Break (food + recreation)" }
+      - { type: focus, start: "14:20", end: "15:20" }
+      - { type: focus, start: "15:30", end: "16:30" }
+      - { type: focus, start: "16:40", end: "17:40" }
+      - { type: fixed, start: "17:40", end: "20:00", label: "Food prep + recreation" }
+      - { type: focus, start: "20:00", end: "21:00" }
+      - { type: focus, start: "21:10", end: "22:10" }
+
+  # Any day you declare a write-off / GF / vacation day. No focus slots.
+  rest:
+    blocks:
+      - { type: fixed, start: "00:00", end: "23:59", label: "Day off — no plan" }
