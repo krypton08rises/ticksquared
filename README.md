@@ -48,6 +48,22 @@ with a tap, and syncs the confirmed plan back to TickTick as scheduled tasks.
   - ❌ drop → logged; sinks to the bottom of future candidates
 - Trigger either manually any time: `/plan` and `/review` in the chat.
 
+### Quick capture: `/add`
+Drop a task into any list without leaving Telegram.
+- `/add` → tap a category (📚 Reading · 🗂 Projects · 📖 Study · 🧹 Admin ·
+  💼 Work · ⚡ Quick) → for Projects pick the sub-project → send the text. Done.
+- `/add buy milk` → one-shot straight into the **Inbox**.
+- 📚 **Reading** items keep any link you paste; on Confirm the morning reading
+  slot stamps a time on it, so TickTick fires a notification with the tappable
+  link at 08:00.
+- 💼 **Work** and ⚡ **Quick** are capture-only — jotted down anytime, never
+  auto-scheduled into a focus slot.
+
+### Schedule shape
+- **08:00–09:00** light reading (pulled from Reading Queue) every day.
+- **Weekday evenings 20:30–22:30** — two 60-min deep-work slots (Projects/Study).
+- **Weekends/day-off** — dense deep-work sessions plus a 30-min admin slot.
+
 ### The scoring seam (why nothing gets wasted later)
 Carry-over lives behind one function, `recommend.score_candidates(category,
 candidates, history)`. Today it's a transparent heuristic (skips bubble up,
@@ -78,7 +94,8 @@ cp .env.example .env        # then fill it in (see below), and: chmod 600 .env
 
 ### 3. TickTick lists
 Make sure you have lists named to match `config.yaml`:
-`Projects`, `Study`, `Admin`, `Reading Queue` (rename in config if you prefer).
+`Projects`, `Study`, `Admin`, `Reading Queue`, `Work`, `Inbox` (rename in config
+if you prefer). `python setup_lists.py` creates any that are missing.
 Put your actual tasks in them. Empty lists fall back to the `items:` in config.
 
 ## Run

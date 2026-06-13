@@ -6,14 +6,22 @@ import zoneinfo
 from typing import Any
 
 from telegram import Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
 
 from bot.handlers import (
+    cmd_add,
     cmd_plan,
     cmd_review,
     cmd_start,
     evening_job,
     morning_job,
+    on_add_text,
     on_callback_guard,
     on_error,
 )
@@ -43,6 +51,10 @@ def build_application(config: dict[str, Any], token: str, chat_id: int | None) -
     app.add_handler(CommandHandler("start",  cmd_start,  filters=me))
     app.add_handler(CommandHandler("plan",   cmd_plan,   filters=me))
     app.add_handler(CommandHandler("review", cmd_review, filters=me))
+    app.add_handler(CommandHandler("add",    cmd_add,    filters=me))
+    # Captures the free-text reply after a category is picked in the /add menu.
+    # No-ops unless an add is pending, so it never hijacks other messages.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & me, on_add_text))
     app.add_handler(CallbackQueryHandler(on_callback_guard))
     app.add_error_handler(on_error)
 

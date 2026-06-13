@@ -57,12 +57,50 @@ def plan_keyboard(slots: list[Slot]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+# --- /add UI ---------------------------------------------------------------
+# First-level menu. Each button maps a category to its TickTick list. The two
+# "add_only" capture lists (Work, Quick/Inbox) sit alongside the schedulable
+# ones so everything is reachable in one tap.
+def add_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📚 Reading", callback_data="add:cat:reading"),
+            InlineKeyboardButton("🗂 Projects", callback_data="add:cat:projects"),
+        ],
+        [
+            InlineKeyboardButton("📖 Study", callback_data="add:cat:study"),
+            InlineKeyboardButton("🧹 Admin", callback_data="add:cat:admin"),
+        ],
+        [
+            InlineKeyboardButton("💼 Work", callback_data="add:cat:work"),
+            InlineKeyboardButton("⚡ Quick", callback_data="add:cat:inbox"),
+        ],
+        [InlineKeyboardButton("✖ Cancel", callback_data="add:cancel")],
+    ])
+
+
+def add_subproject_keyboard(subprojects: list[str]) -> InlineKeyboardMarkup:
+    """Second level shown after tapping Projects: one button per sub-project,
+    addressed by index so names with spaces/punctuation are safe in callbacks."""
+    rows, row = [], []
+    for i, name in enumerate(subprojects):
+        row.append(InlineKeyboardButton(name, callback_data=f"add:proj:{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("✖ Cancel", callback_data="add:cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
 def context_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🏠 Work (home)", callback_data="ctx:home"),
             InlineKeyboardButton("🏢 Work (office)", callback_data="ctx:office"),
         ],
+        [InlineKeyboardButton("🌟 Free day (full focus)", callback_data="ctx:free")],
         [InlineKeyboardButton("😴 Day off / GF / vacation", callback_data="ctx:rest")],
     ])
 

@@ -20,6 +20,8 @@ COLORS = {
     "Study":        "#4A90D9",
     "Admin":        "#7ED321",
     "Reading Queue":"#F5A623",
+    "Work":         "#9013FE",
+    "Inbox":        "#8E8E93",
 }
 
 

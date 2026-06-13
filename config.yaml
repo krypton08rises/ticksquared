@@ -20,19 +20,33 @@ evening_trigger: "22:30"
 # `items` is a fallback: if the TickTick list is empty (or not found), the
 # scheduler offers these generic titles instead so a slot is never blank.
 # `weight` biases how often this category is chosen when filling free slots.
+# `duration_minutes` is the natural length of one slot of this category.
+# `add_only: true` means it is a /add capture target only — the planner never
+#   auto-schedules it into a focus slot (e.g. job tasks, the quick inbox).
 # ---------------------------------------------------------------------------
 categories:
+  # Deep-work rotation pool (60-min evening slots) -------------------------
   projects:
     ticktick_list: "Projects"
     weight: 3
+    duration_minutes: 60
+    # Sub-projects power the /add drill-down menu. Each becomes a tappable
+    # button; the captured task is tagged "[<name>] ..." in the Projects list.
+    subprojects:
+      - "Forge"
+      - "Personal Assistant"
+      - "Quant"
+      - "Finance"
     items:
       - "Hardware Constrained Forge (CUDA + Triton kernels)"
       - "Personal Assistant (ASR + SLM workstation Jarvis)"
       - "Quant (time-series signals for daily/weekly trades)"
+      - "Finance (course)"
 
   study:
     ticktick_list: "Study"
     weight: 2
+    duration_minutes: 60
     items:
       - "SOTA papers — build knowledge base"
       - "Axler — Linear Algebra Done Right (Ch.3)"
@@ -41,17 +55,46 @@ categories:
       - "Find professors / programs + read their research"
       - "Research how to approach a proposal"
 
+  # Pinned categories (placed by the template, kept out of the rotation) ---
+  reading:
+    ticktick_list: "Reading Queue"
+    weight: 1
+    duration_minutes: 60
+    pinned_only: true             # only fills slots a template pins to it
+    items:
+      - "Read a paper abstract + intro"
+      - "Read a saved blog post"
+
   admin:
     ticktick_list: "Admin"
     weight: 1
+    duration_minutes: 30          # admin is quick — half-length slots
+    pinned_only: true             # only the weekend/day-off admin slot uses it
     items:
       - "Sort visas"
       - "Weekly shop"
       - "Clean room"
       - "Laundry"
+      - "Driver's license"
       - "Sports / outing with friends"
 
+  # Capture-only categories (never auto-scheduled) ------------------------
+  work:
+    ticktick_list: "Work"
+    weight: 0
+    duration_minutes: 60
+    add_only: true                # job tasks you jot down outside work hours
+    items: []
+
+  inbox:
+    ticktick_list: "Inbox"
+    weight: 0
+    duration_minutes: 0
+    add_only: true                # /add quick-capture dumping ground
+    items: []
+
 # A short, low-effort thing for the 15-min commute (office days only).
+# Shares the Reading Queue list with the morning reading slot.
 commute:
   ticktick_list: "Reading Queue"
   weight: 1
@@ -75,20 +118,26 @@ focus_break_minutes: 10
 # Each block is either:
 #   type: fixed   -> a labelled block that is NOT a fillable focus slot
 #                    (workout, work, food/recreation, commute-reading)
-#   type: focus   -> a 1-hour fillable slot; the bot assigns a task to it
+#   type: focus   -> a fillable slot; the bot assigns a task to it.
+#                    Add `category: <name>` to PIN the slot to one category
+#                    (e.g. the morning reading slot, the 30-min admin slot).
+#                    Un-pinned focus slots rotate across the deep-work pool
+#                    (projects, study).
 # ---------------------------------------------------------------------------
 templates:
 
   # Monday–Thursday, working from home.
+  #   08:00–09:00  light reading (paper / blog / link)
+  #   20:30–22:30  evening focus: 2× 60-min deep work (admin lives on weekends)
   weekday_home:
     days: [mon, tue, wed, thu]
     blocks:
       - { type: fixed, start: "06:15", end: "07:30", label: "Wake + workout" }
-      - { type: fixed, start: "08:30", end: "17:30", label: "Work" }
-      - { type: fixed, start: "17:30", end: "19:30", label: "Food prep + recreation" }
-      - { type: focus, start: "20:00", end: "21:00" }
-      - { type: focus, start: "21:10", end: "22:10" }
-      - { type: focus, start: "22:20", end: "23:00" }
+      - { type: focus, start: "08:00", end: "09:00", category: reading }
+      - { type: fixed, start: "09:00", end: "17:30", label: "Work" }
+      - { type: fixed, start: "17:30", end: "20:30", label: "Food prep + recreation" }
+      - { type: focus, start: "20:30", end: "21:30" }
+      - { type: focus, start: "21:30", end: "22:30" }
 
   # Wed/Thu when you're in the office (later finish + commute reading).
   # Selected only if you answer "office" to the work question.
@@ -99,16 +148,16 @@ templates:
       - { type: fixed, start: "08:15", end: "08:30", label: "Commute", commute: true }
       - { type: fixed, start: "08:30", end: "18:30", label: "Work (office)" }
       - { type: fixed, start: "18:30", end: "18:45", label: "Commute", commute: true }
-      - { type: fixed, start: "18:45", end: "20:00", label: "Food prep + recreation" }
-      - { type: focus, start: "20:00", end: "21:00" }
-      - { type: focus, start: "21:10", end: "22:10" }
-      - { type: focus, start: "22:20", end: "23:00" }
+      - { type: fixed, start: "18:45", end: "20:30", label: "Food prep + recreation" }
+      - { type: focus, start: "20:30", end: "21:30" }
+      - { type: focus, start: "21:30", end: "22:30" }
 
-  # Friday / Saturday / Sunday — no work. Two dense sessions.
+  # Friday / Saturday / Sunday — no work. Dense sessions + reading + admin.
   weekend:
     days: [fri, sat, sun]
     blocks:
       - { type: fixed, start: "06:30", end: "08:00", label: "Wake + workout" }
+      - { type: focus, start: "08:00", end: "09:00", category: reading }
       - { type: focus, start: "09:00", end: "10:00" }
       - { type: focus, start: "10:10", end: "11:10" }
       - { type: focus, start: "11:20", end: "12:20" }
@@ -118,7 +167,7 @@ templates:
       - { type: focus, start: "16:40", end: "17:40" }
       - { type: fixed, start: "17:40", end: "20:00", label: "Food prep + recreation" }
       - { type: focus, start: "20:00", end: "21:00" }
-      - { type: focus, start: "21:10", end: "22:10" }
+      - { type: focus, start: "21:00", end: "21:30", category: admin }
 
   # Any day you declare a write-off / GF / vacation day. No focus slots.
   rest:

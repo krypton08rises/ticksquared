@@ -14,6 +14,8 @@ import intelligence.history as history
 import storage.state as state
 from bot.ui import (
     _MARKS,
+    add_menu_keyboard,
+    add_subproject_keyboard,
     context_keyboard,
     focus_slots,
     plan_keyboard,
@@ -62,6 +64,132 @@ async def cmd_plan(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_review(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_review(ctx, update.effective_chat.id)
+
+
+# --- /add: quick capture into TickTick lists -------------------------------
+_URL_RE = re.compile(r"https?://\S+")
+
+_CAT_LABELS = {
+    "reading": "Reading",
+    "study": "Study",
+    "admin": "Admin",
+    "work": "Work",
+    "inbox": "Inbox",
+}
+
+
+def _list_name(config: dict[str, Any], category: str) -> str | None:
+    return config.get("categories", {}).get(category, {}).get("ticktick_list")
+
+
+async def _add_to_list(
+    ctx: ContextTypes.DEFAULT_TYPE,
+    list_name: str | None,
+    title: str,
+    content: str | None = None,
+) -> tuple[bool, str | None]:
+    client: TickTickClient | None = ctx.application.bot_data.get("ticktick")
+    if not client:
+        return False, "TickTick not connected — run `python auth.py`."
+    if not list_name:
+        return False, "No list configured for that category."
+    try:
+        proj = client.get_or_create_project(list_name)
+        client.create_task(title=title, project_id=proj["id"], content=content)
+        return True, None
+    except Exception as e:  # noqa: BLE001
+        log.warning("add_to_list failed: %s", e)
+        return False, str(e)
+
+
+async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    # One-shot form: `/add buy milk` drops straight into the Inbox.
+    if ctx.args:
+        config = ctx.application.bot_data["config"]
+        text = " ".join(ctx.args).strip()
+        ok, err = await _add_to_list(ctx, _list_name(config, "inbox") or "Inbox", text)
+        msg = f"➕ Added to *Inbox*:\n{text}" if ok else f"⚠️ Couldn't add: {err}"
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        return
+    await update.message.reply_text(
+        "What do you want to add?", reply_markup=add_menu_keyboard()
+    )
+
+
+async def on_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    config = ctx.application.bot_data["config"]
+    parts = query.data.split(":")  # add:cat:<name> | add:proj:<i> | add:cancel
+    kind = parts[1]
+
+    if kind == "cancel":
+        await query.answer("Cancelled")
+        ctx.user_data.pop("pending_add", None)
+        await safe_edit(query, "Add cancelled.")
+        return
+
+    if kind == "cat":
+        cat = parts[2]
+        if cat == "projects":
+            subs = config["categories"]["projects"].get("subprojects", [])
+            await query.answer()
+            await safe_edit(query, "Which project?", reply_markup=add_subproject_keyboard(subs))
+            return
+        label = _CAT_LABELS.get(cat, cat.capitalize())
+        ctx.user_data["pending_add"] = {
+            "list": _list_name(config, cat),
+            "label": label,
+            "reading": cat == "reading",
+            "prefix": "",
+        }
+        await query.answer()
+        prompt = (
+            "Paste a link or paper/blog title 👇"
+            if cat == "reading"
+            else f"Send the task text for *{label}* 👇"
+        )
+        await safe_edit(query, prompt)
+        return
+
+    if kind == "proj":
+        subs = config["categories"]["projects"].get("subprojects", [])
+        i = int(parts[2])
+        name = subs[i] if 0 <= i < len(subs) else "Projects"
+        ctx.user_data["pending_add"] = {
+            "list": _list_name(config, "projects"),
+            "label": name,
+            "reading": False,
+            "prefix": f"[{name}] ",
+        }
+        await query.answer()
+        await safe_edit(query, f"Send the task text for *{name}* 👇")
+
+
+async def on_add_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Capture the free-text that follows a category pick. No-op unless an /add
+    flow is pending, so ordinary messages pass through untouched."""
+    pending = ctx.user_data.get("pending_add")
+    if not pending:
+        return
+    text = (update.message.text or "").strip()
+    if not text:
+        return
+    ctx.user_data.pop("pending_add", None)
+
+    title = pending.get("prefix", "") + text
+    content = None
+    if pending.get("reading"):
+        m = _URL_RE.search(text)
+        if m:
+            content = m.group(0)  # keep the link tappable from the notification
+
+    ok, err = await _add_to_list(ctx, pending.get("list"), title, content)
+    if ok:
+        await update.message.reply_text(
+            f"➕ Added to *{pending['label']}*:\n{title}", parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(f"⚠️ Couldn't add: {err}")
 
 
 # --- morning flow ----------------------------------------------------------
@@ -154,17 +282,23 @@ async def on_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     if client:
         for s in (sl for sl in slots if sl.is_focus and sl.task_title):
+            start = isodate_with_offset(today, s.start, offset)
+            end = isodate_with_offset(today, s.end, offset)
             try:
-                if not s.task_id:
+                if s.task_id and s.project_id:
+                    # Existing task (e.g. a queued reading link): stamp tonight's
+                    # slot time so TickTick fires a reminder for it.
+                    client.update_task(s.task_id, s.project_id, start=start, end=end)
+                elif not s.task_id:
                     client.create_task(
                         title=s.task_title,
-                        start=isodate_with_offset(today, s.start, offset),
-                        end=isodate_with_offset(today, s.end, offset),
+                        start=start,
+                        end=end,
                         content=f"Scheduled by bot — {s.category} slot.",
                     )
                 created += 1
             except Exception as e:  # noqa: BLE001
-                log.warning("create_task failed: %s", e)
+                log.warning("sync task failed: %s", e)
                 errors += 1
 
     meta = state.get_meta()
@@ -275,6 +409,7 @@ _ROUTES = {
     r"^off$":      on_off,
     r"^evr:":      on_review_mark,
     r"^evsubmit$": on_review_submit,
+    r"^add:":      on_add,
 }
 
 

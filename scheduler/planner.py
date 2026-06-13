@@ -59,10 +59,16 @@ class CandidatePool:
 
 
 def select_template(config: dict[str, Any], day: date, work_mode: str) -> dict[str, Any]:
-    """work_mode: 'home' | 'office' | 'rest'."""
+    """work_mode: 'home' | 'office' | 'free' | 'rest'.
+
+    'free' is a non-work day you still want a full focus plan for (weekend
+    template); 'rest' is a total day off with no plan.
+    """
     templates = config["templates"]
     if work_mode == "rest":
         return templates["rest"]
+    if work_mode == "free":
+        return templates["weekend"]
 
     key = _WEEKDAY_KEYS[day.weekday()]
     if work_mode == "office" and key in templates["weekday_office"].get("days", []):
@@ -75,9 +81,30 @@ def select_template(config: dict[str, Any], day: date, work_mode: str) -> dict[s
     return templates["weekend"]
 
 
-def _ordered_categories(config: dict[str, Any]) -> list[str]:
+def _pinned_categories(template: dict[str, Any]) -> set[str]:
+    """Categories a template explicitly pins to a focus block (e.g. reading,
+    admin). These are placed by the template, so they stay out of the rotation
+    pool to avoid doubling up in the generic deep-work slots."""
+    return {
+        b["category"]
+        for b in template.get("blocks", [])
+        if b.get("type") == "focus" and b.get("category")
+    }
+
+
+def _ordered_categories(config: dict[str, Any], exclude: set[str] | None = None) -> list[str]:
+    """Rotation pool: weight-ordered categories, dropping `add_only` ones
+    (capture-only lists the planner must never auto-schedule) and any the
+    caller asks to exclude (template-pinned categories)."""
+    exclude = exclude or set()
     cats = config.get("categories", {})
-    return sorted(cats, key=lambda c: -cats[c].get("weight", 1))
+    pool = [
+        c for c in cats
+        if not cats[c].get("add_only", False)
+        and not cats[c].get("pinned_only", False)
+        and c not in exclude
+    ]
+    return sorted(pool, key=lambda c: -cats[c].get("weight", 1))
 
 
 def build_plan(
@@ -91,10 +118,13 @@ def build_plan(
     template = select_template(config, day, work_mode)
     pool = CandidatePool(client, config, history)
     strategy = config.get("fill_strategy", "rotation")
-    cat_order = _ordered_categories(config)
+    pinned = _pinned_categories(template)
+    cat_order = _ordered_categories(config, exclude=pinned)
 
     used: dict[str, int] = {c: 0 for c in cat_order}
     used["commute"] = 0
+    for c in pinned:
+        used.setdefault(c, 0)
     rot = rotation_offset
 
     slots: list[Slot] = []
@@ -105,10 +135,14 @@ def build_plan(
 
         if block.get("commute"):
             category = "commute"
+        elif block.get("category"):           # template pins this slot
+            category = block["category"]
+        elif not cat_order:
+            category = ""
         elif strategy == "priority":
             category = _next_priority_category(cat_order, used, pool)
         else:
-            category = cat_order[rot % len(cat_order)] if cat_order else ""
+            category = cat_order[rot % len(cat_order)]
             rot += 1
 
         candidates = pool.for_category(category)

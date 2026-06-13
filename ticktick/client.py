@@ -152,6 +152,32 @@ class TickTickClient:
         r.raise_for_status()
         return r.json()
 
+    def update_task(
+        self,
+        task_id: str,
+        project_id: str,
+        start: str | None = None,
+        end: str | None = None,
+        content: str | None = None,
+    ) -> dict[str, Any]:
+        """Patch an existing task. TickTick's update endpoint is POST to
+        /task/{id} with the id + projectId in the body. Used to drop a
+        start/due time onto a task that already exists (e.g. a queued reading
+        item) so the app fires a timed reminder for it."""
+        body: dict[str, Any] = {"id": task_id, "projectId": project_id}
+        if start:
+            body["startDate"] = start
+            body["isAllDay"] = False
+        if end:
+            body["dueDate"] = end
+        if content is not None:
+            body["content"] = content
+        r = requests.post(
+            f"{API_BASE}/task/{task_id}", headers=self._headers(), json=body, timeout=30
+        )
+        r.raise_for_status()
+        return r.json()
+
     def complete_task(self, project_id: str, task_id: str) -> None:
         r = requests.post(
             f"{API_BASE}/project/{project_id}/task/{task_id}/complete",

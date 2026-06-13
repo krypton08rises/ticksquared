@@ -8,6 +8,8 @@ tokens.json
 
 # --- Runtime / personal data ---
 state/
+# personal curricula (e.g. finance.yaml) — definitions are private
+courses/
 
 # --- Python ---
 __pycache__/
