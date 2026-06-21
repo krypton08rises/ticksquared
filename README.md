@@ -72,6 +72,37 @@ function body** with a model trained on `state/history.jsonl` — the scheduler,
 evening loop, Telegram UI, and log are untouched. The history log is the
 durable artifact; the heuristic is deliberately disposable.
 
+### Courses — curriculum-driven slots
+A **course** is a phased curriculum you author once in `courses/<name>.yaml`
+(see `courses/finance.yaml`). Phases hold steps; each step needs `sessions`
+focus slots of work. The active step of every course automatically **leads the
+candidate pool** for its `category`, so a focus slot defaults to "the next thing
+in the course" — you can still 🔄 reshuffle to a manual task.
+
+- **Progress is derived purely from the history log** — a step is complete once
+  it has accumulated `sessions` worth of ✅ done events. There's no separate
+  counter to desync; delete a course file and nothing breaks, add one and it
+  starts driving slots the next morning.
+- **One TickTick task per step.** A multi-session step stays open and resurfaces
+  each day, re-stamped with that day's slot time; the bot only marks it complete
+  on the **final** session.
+- **`gate: true`** on a checkpoint step locks every later phase until it's done.
+- **`/courses`** — show where each course stands (active step, sessions, % done).
+
+Minimal shape:
+```yaml
+id: hcf
+title: "Hardware Constrained Forge"
+category: projects          # which scheduler category this feeds
+subproject: Forge           # tags slots "[Forge] ..."
+ticktick_list: Projects
+phases:
+  - id: p0
+    steps:
+      - { id: p0-r1, title: "PMPP — Ch.1-3", sessions: 6 }
+      - { id: p0-cp, title: "Profile a working SAXPY kernel", gate: true, sessions: 1 }
+```
+
 ## Setup
 
 ```bash

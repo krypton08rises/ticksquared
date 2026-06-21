@@ -13,6 +13,7 @@ class Slot:
     task_title: str = ""               # chosen task
     task_id: str = ""                  # TickTick id, if drawn from a real task
     project_id: str = ""               # TickTick list id of the task
+    course_ref: str = ""               # "<course_id>/<step_id>" if a course drives this slot
     candidates: list[dict] = field(default_factory=list)  # alternatives for reshuffle
 
     @property

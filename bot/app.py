@@ -16,6 +16,7 @@ from telegram.ext import (
 
 from bot.handlers import (
     cmd_add,
+    cmd_courses,
     cmd_plan,
     cmd_review,
     cmd_start,
@@ -51,6 +52,7 @@ def build_application(config: dict[str, Any], token: str, chat_id: int | None) -
     app.add_handler(CommandHandler("start",  cmd_start,  filters=me))
     app.add_handler(CommandHandler("plan",   cmd_plan,   filters=me))
     app.add_handler(CommandHandler("review", cmd_review, filters=me))
+    app.add_handler(CommandHandler("courses", cmd_courses, filters=me))
     app.add_handler(CommandHandler("add",    cmd_add,    filters=me))
     # Captures the free-text reply after a category is picked in the /add menu.
     # No-ops unless an add is pending, so it never hijacks other messages.

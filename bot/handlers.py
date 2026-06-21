@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes
 
 import intelligence.history as history
 import storage.state as state
+from intelligence import courses
 from bot.ui import (
     _MARKS,
     add_menu_keyboard,
@@ -64,6 +65,10 @@ async def cmd_plan(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_review(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_review(ctx, update.effective_chat.id)
+
+
+async def cmd_courses(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(courses.progress_report(), parse_mode="Markdown")
 
 
 # --- /add: quick capture into TickTick lists -------------------------------
@@ -250,6 +255,7 @@ async def on_swap(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     slot.task_title = chosen["title"]
     slot.task_id = chosen["task_id"]
     slot.project_id = chosen["project_id"]
+    slot.course_ref = chosen.get("course_ref", "")
 
     state.save_day(today, slots, data["context"])
     await query.answer(f"→ {chosen['title'][:40]}")
@@ -363,6 +369,7 @@ async def on_review_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     outcomes = data["context"].get("outcomes", {})
     day_type = data["context"].get("work_mode", "")
     counts = {"done": 0, "skip": 0, "drop": 0, "unmarked": 0}
+    finished_steps: list[str] = []
 
     for i, s in enumerate(slots):
         if not s.is_focus:
@@ -372,6 +379,11 @@ async def on_review_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             counts["unmarked"] += 1
             continue
         counts[outcome] += 1
+
+        # For a course-driven slot, this done event is one of N sessions. Decide
+        # whether it's the last one BEFORE logging it — only then do we close the
+        # TickTick task; otherwise it stays open to resurface for the next session.
+        final = courses.is_final_session(s.course_ref) if outcome == "done" else False
 
         history.append_event({
             "date": today.isoformat(),
@@ -383,21 +395,26 @@ async def on_review_submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             "task_title": s.task_title,
             "task_id": s.task_id,
             "project_id": s.project_id,
+            "course_ref": s.course_ref,
             "offered_alternatives": [c["title"] for c in s.candidates],
             "outcome": outcome,
         })
 
-        if outcome == "done" and client and s.task_id and s.project_id:
+        if outcome == "done" and final and client and s.task_id and s.project_id:
             try:
                 client.complete_task(s.project_id, s.task_id)
             except Exception as e:  # noqa: BLE001
                 log.warning("complete_task failed: %s", e)
+        if outcome == "done" and s.course_ref and final:
+            finished_steps.append(s.task_title)
 
     summary = (
         f"*Review saved.* ✅ {counts['done']}  ⏭️ {counts['skip']}  ❌ {counts['drop']}"
         + (f"  ·{counts['unmarked']} unmarked" if counts["unmarked"] else "")
     )
     tail = "\n_Skipped tasks will float up tomorrow morning._" if counts["skip"] else ""
+    if finished_steps:
+        tail += "\n📘 Course step complete: " + ", ".join(finished_steps)
     await safe_edit(query, summary + tail)
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from intelligence import courses as courses_mod
 from intelligence.scorer import score_candidates
 from scheduler.models import Slot
 from ticktick.client import TickTickClient
@@ -24,6 +25,10 @@ class CandidatePool:
         self.config = config
         self.history = history or []
         self._cache: dict[str, list[dict]] = {}
+        # Course progress is read from the FULL history (not the windowed slice
+        # passed for scoring), so sessions accumulated weeks ago still count.
+        self._courses = courses_mod.load_courses()
+        self._course_done = courses_mod.done_counts()
 
     def for_category(self, category: str) -> list[dict]:
         if category in self._cache:
@@ -48,9 +53,28 @@ class CandidatePool:
             candidates = [{"title": i, "task_id": "", "project_id": ""}
                           for i in cfg.get("items", [])]
 
+        candidates = self._lead_with_courses(category, candidates)
         candidates = score_candidates(category, candidates, self.history)
         self._cache[category] = candidates
         return candidates
+
+    def _lead_with_courses(self, category: str, candidates: list[dict]) -> list[dict]:
+        """Prepend each feeding course's active step. If that step already exists
+        as a real TickTick task (created on a prior day's Confirm), reuse its
+        id so the slot updates that one task across sessions instead of spawning
+        a duplicate every day."""
+        course_cands = courses_mod.candidates_for(category, self._course_done, self._courses)
+        if not course_cands:
+            return candidates
+        by_title = {c["title"]: c for c in candidates}
+        front = []
+        for cc in course_cands:
+            match = by_title.pop(cc["title"], None)
+            if match:
+                cc["task_id"] = match.get("task_id", "")
+                cc["project_id"] = match.get("project_id", "")
+            front.append(cc)
+        return front + list(by_title.values())
 
     def _category_cfg(self, category: str) -> dict[str, Any]:
         if category == "commute":
@@ -156,6 +180,7 @@ def build_plan(
             slot.task_title = chosen["title"]
             slot.task_id = chosen["task_id"]
             slot.project_id = chosen["project_id"]
+            slot.course_ref = chosen.get("course_ref", "")
         else:
             slot.task_title = "(no candidate — add tasks to this list)"
         slots.append(slot)
